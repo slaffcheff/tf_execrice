@@ -2,6 +2,24 @@ provider "aws" {
   region = "eu-central-1"
 }
 
+resource "aws_launch_configuration" "example" {
+  image_id        = "ami-0bc8166ded464936f"
+  instance_type   = "t2.micro"
+  security_groups = [aws_security_group.instance.id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              echo "Hello, World" > index.html
+              nohup busybox httpd -f -p ${var.server_port} &
+              EOF
+
+  # Required when using a launch configuration with an auto scaling group.
+  # https://www.terraform.io/docs/providers/aws/r/launch_configuration.html
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "aws_autoscaling_group" "example" {
   launch_configuration = aws_launch_configuration.example.name
   vpc_zone_identifier  = data.aws_subnet_ids.default.ids
@@ -19,54 +37,16 @@ resource "aws_autoscaling_group" "example" {
   }
 }
 
-resource "aws_launch_configuration" "example" {
-  image_id        = "ami-0bc8166ded464936f"
-  instance_type   = "t2.micro"
-  security_groups = [aws_security_group.instance.id]
-
-  user_data = <<-EOF
-              #!/bin/bash
-              echo "Hello, World" > index.html
-              nohup busybox httpd -f -p 8080 &
-              EOF
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
 resource "aws_security_group" "instance" {
-
-  name = var.security_group_name
+  name = var.instance_security_group_name
 
   ingress {
-    from_port   = 8080
-    to_port     = 8080
+    from_port   = var.server_port
+    to_port     = var.server_port
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
-
-resource "aws_security_group" "alb" {
-  name = "terraform-example-alb"
-
-  #Allow inbound HTTP requests
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  #Allow all outbound requests
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
 
 data "aws_vpc" "default" {
   default = true
@@ -77,7 +57,9 @@ data "aws_subnet_ids" "default" {
 }
 
 resource "aws_lb" "example" {
-  name               = "terraform-asg-example"
+
+  name = var.alb_name
+
   load_balancer_type = "application"
   subnets            = data.aws_subnet_ids.default.ids
   security_groups    = [aws_security_group.alb.id]
@@ -88,6 +70,7 @@ resource "aws_lb_listener" "http" {
   port              = 80
   protocol          = "HTTP"
 
+  # By default, return a simple 404 page
   default_action {
     type = "fixed-response"
 
@@ -100,7 +83,9 @@ resource "aws_lb_listener" "http" {
 }
 
 resource "aws_lb_target_group" "asg" {
-  name     = "terraform-asg-example"
+
+  name = var.alb_name
+
   port     = var.server_port
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.default.id
@@ -131,19 +116,23 @@ resource "aws_lb_listener_rule" "asg" {
   }
 }
 
+resource "aws_security_group" "alb" {
 
-resource "aws_instance" "example" {
-  ami                    = "ami-0bc8166ded464936f"
-  instance_type          = "t2.micro"
-  vpc_security_group_ids = [aws_security_group.instance.id]
+  name = var.alb_security_group_name
 
-  user_data = <<-EOF
-              #!/bin/bash
-              echo "Hello, World" > index.html
-              nohup busybox httpd -f -p 8080 &
-              EOF
+  # Allow inbound HTTP requests
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-  tags = {
-    Name = "terraform-example"
+  # Allow all outbound requests
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
